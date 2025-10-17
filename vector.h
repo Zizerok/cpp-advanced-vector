@@ -198,38 +198,48 @@ public:
 template <typename... Args>
 iterator Emplace(const_iterator pos, Args&&... args) {
     assert(pos >= begin() && pos <= end());
-    iterator result = nullptr;
     size_t index = pos - begin();
+    iterator result = nullptr;
 
     if (size_ == Capacity()) {
         RawMemory<T> new_data(size_ == 0 ? 1 : size_ * 2);
-        try{
-        result = new (new_data + index) T(std::forward<Args>(args)...);
+        new (new_data + index) T(std::forward<Args>(args)...);
+        result = new_data + index;
 
-        if constexpr (std::is_nothrow_move_constructible_v<T> || !std::is_copy_constructible_v<T>) {
-            std::uninitialized_move_n(begin(), index , new_data.GetAddress());
-            std::uninitialized_move_n(begin() + index , size_ - index , new_data.GetAddress() + index  + 1);
-        } else {
-            std::uninitialized_copy_n(begin(), index , new_data.GetAddress());
-            std::uninitialized_copy_n(begin() + index , size_ - index , new_data.GetAddress() + index  + 1); 
-        }}catch (...) {
-                std::destroy_n(new_data.GetAddress() + index , 1);
-                throw;
+        try {
+            if constexpr (std::is_nothrow_move_constructible_v<T> || !std::is_copy_constructible_v<T>) {
+                std::uninitialized_move_n(begin(), index, new_data.GetAddress());
+                std::uninitialized_move_n(begin() + index, size_ - index, new_data.GetAddress() + index + 1);
+            } else {
+                std::uninitialized_copy_n(begin(), index, new_data.GetAddress());
+                std::uninitialized_copy_n(begin() + index, size_ - index, new_data.GetAddress() + index + 1);
             }
+        } catch (...) {
+            std::destroy_at(new_data + index);
+            std::destroy_n(new_data.GetAddress(), index);
+            throw;
+        }
+
         std::destroy_n(begin(), size_);
         data_.Swap(new_data);
     } else {
-        if (size_ != 0) {
-            new (data_ + size_) T(std::move(*(end() - 1)));
+        iterator mutable_pos = begin() + index;
+
+        if (index == size_) {
+            result = new (data_ + size_) T(std::forward<Args>(args)...);
+        } else {
+            new (data_ + size_) T(std::move(*(end() - 1))); 
+
             try {
-                std::move_backward(begin() + index, end(), end() + 1);
+                std::move_backward(mutable_pos, end() - 1, end());
+                *mutable_pos = T(std::forward<Args>(args)...);
             } catch (...) {
-                std::destroy_n(end(), 1);
+                std::destroy_at(end()); 
                 throw;
             }
-            std::destroy_at(begin() + index);
+
+            result = mutable_pos;
         }
-        result = new (data_ + index) T(std::forward<Args>(args)...);
     }
 
     ++size_;
@@ -238,8 +248,9 @@ iterator Emplace(const_iterator pos, Args&&... args) {
 
 
 
+
     iterator Erase(const_iterator pos) {
-        assert(pos >= begin() && pos <= end());
+        assert(pos >= begin() && pos < end());
         size_t index = pos - begin();
         std::move(begin() + index + 1, end(), begin() + index);
         --size_;
