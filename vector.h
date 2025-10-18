@@ -199,55 +199,78 @@ template <typename... Args>
 iterator Emplace(const_iterator pos, Args&&... args) {
     assert(pos >= begin() && pos <= end());
     size_t index = pos - begin();
-    iterator result = nullptr;
+    T* ptr = data_.GetAddress();
 
     if (size_ == Capacity()) {
-        RawMemory<T> new_data(size_ == 0 ? 1 : size_ * 2);
-        new (new_data + index) T(std::forward<Args>(args)...);
-        result = new_data + index;
+        size_t new_capacity = size_ == 0 ? 1 : size_ * 2;
+        RawMemory<T> new_data(new_capacity);
+        T* new_ptr = new_data.GetAddress() + index;
+
+        size_t constructed = 0;
 
         try {
+
+            new (new_ptr) T(std::forward<Args>(args)...);
+            ++constructed;
+
+
             if constexpr (std::is_nothrow_move_constructible_v<T> || !std::is_copy_constructible_v<T>) {
-                std::uninitialized_move_n(begin(), index, new_data.GetAddress());
-                std::uninitialized_move_n(begin() + index, size_ - index, new_data.GetAddress() + index + 1);
+                std::uninitialized_move_n(ptr, index, new_data.GetAddress());
             } else {
-                std::uninitialized_copy_n(begin(), index, new_data.GetAddress());
-                std::uninitialized_copy_n(begin() + index, size_ - index, new_data.GetAddress() + index + 1);
+                std::uninitialized_copy_n(ptr, index, new_data.GetAddress());
             }
+            constructed += index;
+
+
+            if constexpr (std::is_nothrow_move_constructible_v<T> || !std::is_copy_constructible_v<T>) {
+                std::uninitialized_move_n(ptr + index, size_ - index, new_data.GetAddress() + index + 1);
+            } else {
+                std::uninitialized_copy_n(ptr + index, size_ - index, new_data.GetAddress() + index + 1);
+            }
+            constructed += size_ - index;
+
         } catch (...) {
-            std::destroy_at(new_data + index);
-            std::destroy_n(new_data.GetAddress(), index);
+
+            for (size_t i = 0; i < constructed; ++i) {
+                std::destroy_at(new_data.GetAddress() + i);
+            }
             throw;
         }
 
-        std::destroy_n(begin(), size_);
+        std::destroy_n(ptr, size_);
         data_.Swap(new_data);
+        ++size_;
+        return begin() + index;
+
     } else {
         iterator mutable_pos = begin() + index;
 
         if (index == size_) {
-            result = new (data_ + size_) T(std::forward<Args>(args)...);
+            T* new_elem = new (ptr + size_) T(std::forward<Args>(args)...);
+            ++size_;
+            return new_elem;
         } else {
-            new (data_ + size_) T(std::move(*(end() - 1))); 
+            T temp(std::forward<Args>(args)...);
+            size_t constructed = 0;
 
             try {
-                std::move_backward(mutable_pos, end() - 1, end());
-                *mutable_pos = T(std::forward<Args>(args)...);
+                new (ptr + size_) T(std::move(ptr[size_ - 1]));
+                ++constructed;
+                std::move_backward(ptr + index, ptr + size_ - 1, ptr + size_);
+
+                ptr[index] = std::move(temp);
+                ++size_;
             } catch (...) {
-                std::destroy_at(end()); 
+                if (constructed) {
+                    std::destroy_at(ptr + size_);
+                }
                 throw;
             }
 
-            result = mutable_pos;
+            return mutable_pos;
         }
     }
-
-    ++size_;
-    return result;
 }
-
-
-
 
     iterator Erase(const_iterator pos) {
         assert(pos >= begin() && pos < end());
@@ -258,25 +281,13 @@ iterator Emplace(const_iterator pos, Args&&... args) {
         return begin() + index;
     }
 
-    iterator Insert(const_iterator pos, const T& value) {
-    assert(pos >= begin() && pos <= end());
-    size_t shift = pos - begin();
-
-    const void* p = reinterpret_cast<const void*>(std::addressof(value));
-    const void* buf_begin = reinterpret_cast<const void*>(data_.GetAddress() + shift);
-    const void* buf_end   = reinterpret_cast<const void*>(data_.GetAddress() + size_);
-
-    if (p >= buf_begin && p < buf_end) {
-        T tmp = value;
-        return Emplace(pos, std::move(tmp));
-    } else {
-        return Emplace(pos, value);
+    iterator Insert(const_iterator pos, const T& value) { 
+        return Emplace(pos, value); 
+    } 
+ 
+    iterator Insert(const_iterator pos, T&& value) { 
+        return Emplace(pos, std::move(value)); 
     }
-}
-
-iterator Insert(const_iterator pos, T&& value){
-    return Emplace(pos, std::move(value));
-}
     
     void Reserve(size_t capacity){
         if(capacity <= data_.Capacity()){
