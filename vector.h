@@ -209,10 +209,8 @@ iterator Emplace(const_iterator pos, Args&&... args) {
         size_t constructed = 0;
 
         try {
-
             new (new_ptr) T(std::forward<Args>(args)...);
             ++constructed;
-
 
             if constexpr (std::is_nothrow_move_constructible_v<T> || !std::is_copy_constructible_v<T>) {
                 std::uninitialized_move_n(ptr, index, new_data.GetAddress());
@@ -220,7 +218,6 @@ iterator Emplace(const_iterator pos, Args&&... args) {
                 std::uninitialized_copy_n(ptr, index, new_data.GetAddress());
             }
             constructed += index;
-
 
             if constexpr (std::is_nothrow_move_constructible_v<T> || !std::is_copy_constructible_v<T>) {
                 std::uninitialized_move_n(ptr + index, size_ - index, new_data.GetAddress() + index + 1);
